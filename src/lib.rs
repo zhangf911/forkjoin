@@ -317,7 +317,7 @@ pub struct Algorithm<Arg: Send, Ret: Send + Sync> {
 }
 
 /// Internal struct for receiving results from multiple subtasks in parallel
-pub struct JoinBarrier<'a, Ret: Send + Sync> {
+pub struct JoinBarrier<'a, Ret: Send + Sync + 'a> {
     /// Atomic counter counting missing arguments before this join can be executed.
     pub ret_counter: AtomicUsize,
     /// Function to execute when all arguments have arrived.
@@ -332,7 +332,7 @@ pub struct JoinBarrier<'a, Ret: Send + Sync> {
 }
 
 /// Enum describing what to do with results of `Task`s and `JoinBarrier`s.
-pub enum ResultReceiver<'a, Ret: Send + Sync> {
+pub enum ResultReceiver<'a, Ret: Send + Sync + 'a> {
     /// Algorithm has Summa style and the value should be inserted into a `JoinBarrier`
     Join(Unique<Ret>, Arc<JoinBarrier<'a, Ret>>),
     /// Algorithm has Search style and results should be sent directly to the owner.
@@ -411,7 +411,7 @@ impl<'a, Ret> Drop for Job<'a, Ret> {
 
 /// A handle for a specific `Algorithm` running on a `ForkPool`.
 /// Acquired from `ForkPool::init_algorithm`.
-pub struct AlgoOnPool<'a, Arg: Send, Ret: Send + Sync> {
+pub struct AlgoOnPool<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
     forkpool: &'a ForkPool<'a, Arg, Ret>,
     algo: Algorithm<Arg, Ret>,
 }
@@ -444,7 +444,7 @@ impl<'a, Arg: Send, Ret: Send + Sync> AlgoOnPool<'a, Arg, Ret> {
 
 /// Main struct of the ForkJoin library.
 /// Represents a pool of threads implementing a work stealing algorithm.
-pub struct ForkPool<'a, Arg: Send, Ret: Send + Sync> {
+pub struct ForkPool<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
     joinguard: thread::JoinGuard<'a, ()>,
     channel: Sender<SupervisorMsg<'a, Arg, Ret>>,
 }

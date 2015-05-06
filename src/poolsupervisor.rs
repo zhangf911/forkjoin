@@ -23,7 +23,7 @@ use ::Task;
 use ::workerthread::{WorkerThread};
 
 /// Messages from `ForkPool` and `WorkerThread` to the `PoolSupervisor`.
-pub enum SupervisorMsg<'a, Arg: Send, Ret: Send + Sync> {
+pub enum SupervisorMsg<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
     /// The WorkerThreads use this to tell the `PoolSupervisor` they don't have anything
     /// to do and that stealing did not give any new `Task`s.
     /// The argument `usize` is the id of the `WorkerThread`.
@@ -41,11 +41,11 @@ struct ThreadInfo<'t> {
     #[allow(dead_code)] _joinguard: thread::JoinGuard<'t, ()>,
 }
 
-pub struct PoolSupervisorThread<'t, Arg: Send, Ret: Send + Sync> {
-    port: Receiver<SupervisorMsg<'t, Arg, Ret>>,
-    thread_infos: Vec<ThreadInfo<'t>>,
+pub struct PoolSupervisorThread<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
+    port: Receiver<SupervisorMsg<'a, Arg, Ret>>,
+    thread_infos: Vec<ThreadInfo<'a>>,
     idle: usize,
-    queue: Worker<Task<'t, Arg, Ret>>,
+    queue: Worker<Task<'a, Arg, Ret>>,
     sleepers: Arc<AtomicUsize>,
 }
 

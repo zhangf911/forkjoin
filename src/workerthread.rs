@@ -29,7 +29,7 @@ use ::poolsupervisor::SupervisorMsg;
 static STEAL_TRIES_UNTIL_BACKOFF: u32 = 30;
 static BACKOFF_INC_US: u32 = 10;
 
-pub struct WorkerThread<'a, Arg: Send, Ret: Send + Sync> {
+pub struct WorkerThread<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
     id: usize,
     started: bool,
     supervisor_port: Receiver<()>,
