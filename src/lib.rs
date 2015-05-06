@@ -230,6 +230,7 @@ use std::sync::{Arc,Mutex};
 use std::sync::mpsc::{channel,Sender,Receiver,TryRecvError};
 use std::fmt;
 use std::thread;
+use std::marker::PhantomData;
 
 mod workerthread;
 mod poolsupervisor;
@@ -249,10 +250,10 @@ pub type TaskJoin<Ret> = extern "Rust" fn(&[Ret]) -> Ret;
 pub type TaskJoinArg<Ret> = extern "Rust" fn(&Ret, &[Ret]) -> Ret;
 
 /// Internal representation of a task.
-pub struct Task<Arg: Send, Ret: Send + Sync> {
-    pub algo: Algorithm<Arg, Ret>,
+pub struct Task<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
+    pub algo: &'a Algorithm<Arg, Ret>,
     pub arg: Arg,
-    pub join: ResultReceiver<Ret>,
+    pub join: ResultReceiver<'a, Ret>,
 }
 
 /// Return values from tasks. Represent a computed value or a fork of the algorithm.
@@ -292,8 +293,6 @@ pub enum AlgoStyle<Ret> {
     /// represent a complete solution.
     Search,
 }
-impl<Ret> Copy for AlgoStyle<Ret> {}
-impl<Ret> Clone for AlgoStyle<Ret> { fn clone(&self) -> AlgoStyle<Ret> { *self } }
 
 /// Enum indicating what type of join function an `Algorithm` will use.
 pub enum SummaStyle<Ret> {
@@ -304,8 +303,6 @@ pub enum SummaStyle<Ret> {
     /// be passed an argument sent directly from the `TaskFun`.
     Arg(TaskJoinArg<Ret>),
 }
-impl<Ret> Copy for SummaStyle<Ret> {}
-impl<Ret> Clone for SummaStyle<Ret> { fn clone(&self) -> SummaStyle<Ret> { *self } }
 
 /// The representation of a specific algorithm to use the ForkJoin library.
 ///
@@ -318,35 +315,31 @@ pub struct Algorithm<Arg: Send, Ret: Send + Sync> {
     /// subtasks created by forks of this algorithm.
     pub style: AlgoStyle<Ret>,
 }
-impl<Arg: Send, Ret: Send + Sync> Copy for Algorithm<Arg,Ret> {}
-impl<Arg: Send, Ret: Send + Sync> Clone for Algorithm<Arg,Ret> {
-    fn clone(&self) -> Algorithm<Arg,Ret> { *self }
-}
 
 /// Internal struct for receiving results from multiple subtasks in parallel
-pub struct JoinBarrier<Ret: Send + Sync> {
+pub struct JoinBarrier<'a, Ret: Send + Sync> {
     /// Atomic counter counting missing arguments before this join can be executed.
     pub ret_counter: AtomicUsize,
     /// Function to execute when all arguments have arrived.
-    pub joinfun: SummaStyle<Ret>,
+    pub joinfun: &'a SummaStyle<Ret>,
     /// Extra argument to pass to `joinfun` only used when `joinfun` is `SummaStyle::Arg`.
     pub joinarg: Option<Ret>,
     /// Vector holding the results of all subtasks. Initialized unsafely so can't be used
     /// for anything until all the values have been put in place.
     pub joinfunarg: Vec<Ret>,
     /// Where to send the result of the execution of `joinfun`
-    pub parent: ResultReceiver<Ret>,
+    pub parent: ResultReceiver<'a, Ret>,
 }
 
 /// Enum describing what to do with results of `Task`s and `JoinBarrier`s.
-pub enum ResultReceiver<Ret: Send + Sync> {
+pub enum ResultReceiver<'a, Ret: Send + Sync> {
     /// Algorithm has Summa style and the value should be inserted into a `JoinBarrier`
-    Join(Unique<Ret>, Arc<JoinBarrier<Ret>>),
+    Join(Unique<Ret>, Arc<JoinBarrier<'a, Ret>>),
     /// Algorithm has Search style and results should be sent directly to the owner.
     Channel(Arc<Mutex<Sender<Ret>>>),
 }
 
-impl<Ret: Send + Sync> Clone for ResultReceiver<Ret> {
+impl<'a, Ret: Send + Sync> Clone for ResultReceiver<'a, Ret> {
     fn clone(&self) -> Self {
         match *self {
             ResultReceiver::Join(..) => panic!("Unable to clone ResultReceiver::Join"),
@@ -376,11 +369,12 @@ impl fmt::Display for ResultError {
 /// The handle for a computation. Can be used to fetch results of the computation.
 /// Upon drop it will wait for the entire computation to complete if it's still executing.
 /// Algorithm termination is detected by the `try_recv` and `recv` methods returning a `ResultError`
-pub struct Job<Ret> {
+pub struct Job<'a, Ret: 'a> {
     port: Receiver<Ret>,
+    _marker: PhantomData<&'a Ret>,
 }
 
-impl<Ret> Job<Ret> {
+impl<'a, Ret> Job<'a, Ret> {
     /// Attempt to get a result from this `Job` without blocking.
     /// Will return a `ResultError` if no result is available at the time of call.
     pub fn try_recv(&self) -> Result<Ret, ResultError> {
@@ -402,7 +396,7 @@ impl<Ret> Job<Ret> {
     }
 }
 
-impl<Ret> Drop for Job<Ret> {
+impl<'a, Ret> Drop for Job<'a, Ret> {
     /// Don't allow a job to be dropped while it's still computing.
     /// Block and fetch all results.
     fn drop(&mut self) {
@@ -417,7 +411,7 @@ impl<Ret> Drop for Job<Ret> {
 
 /// A handle for a specific `Algorithm` running on a `ForkPool`.
 /// Acquired from `ForkPool::init_algorithm`.
-pub struct AlgoOnPool<'a, Arg: 'a + Send, Ret: 'a + Send + Sync> {
+pub struct AlgoOnPool<'a, Arg: Send, Ret: Send + Sync> {
     forkpool: &'a ForkPool<'a, Arg, Ret>,
     algo: Algorithm<Arg, Ret>,
 }
@@ -429,29 +423,33 @@ impl<'a, Arg: Send, Ret: Send + Sync> AlgoOnPool<'a, Arg, Ret> {
     /// `AlgoStyle::Summa` will only return one message on this channel.
     ///
     /// `AlgoStyle::Search` algorithm might return arbitrary number of messages.
-    pub fn schedule(&self, arg: Arg) -> Job<Ret> {
+    pub fn schedule<'j>(&self, arg: Arg) -> Job<'j, Ret> where
+        Arg: 'j
+    {
         let (chan, port) = channel();
 
         let task = Task {
-            algo: self.algo,
+            algo: &self.algo,
             arg: arg,
             join: ResultReceiver::Channel(Arc::new(Mutex::new(chan))),
         };
         self.forkpool.schedule(task);
 
-        Job { port: port }
+        Job {
+            port: port,
+            _marker: PhantomData,
+        }
     }
 }
 
 /// Main struct of the ForkJoin library.
 /// Represents a pool of threads implementing a work stealing algorithm.
 pub struct ForkPool<'a, Arg: Send, Ret: Send + Sync> {
-    #[allow(dead_code)]
     joinguard: thread::JoinGuard<'a, ()>,
-    channel: Sender<SupervisorMsg<Arg, Ret>>,
+    channel: Sender<SupervisorMsg<'a, Arg, Ret>>,
 }
 
-impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> ForkPool<'a, Arg, Ret> {
+impl<'a, Arg: Send, Ret: Send + Sync> ForkPool<'a, Arg, Ret> {
     /// Create a new `ForkPool` using num_cpus to determine pool size
     pub fn new() -> ForkPool<'a, Arg, Ret> {
         let nthreads = num_cpus::get();
@@ -471,14 +469,14 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> ForkPool<'a, Arg, Ret> {
 
     /// Apply a specified algorithm to this `ForkPool` and get a handle for it where jobs
     /// can be scheduled.
-    pub fn init_algorithm(&self, algorithm: Algorithm<Arg, Ret>) -> AlgoOnPool<Arg, Ret> {
+    pub fn init_algorithm(&'a self, algorithm: Algorithm<Arg, Ret>) -> AlgoOnPool<'a, Arg, Ret> {
         AlgoOnPool {
             forkpool: self,
             algo: algorithm,
         }
     }
 
-    fn schedule(&self, task: Task<Arg, Ret>) {
+    fn schedule(&self, task: Task<'a, Arg, Ret>) {
         self.channel.send(SupervisorMsg::Schedule(task)).unwrap();
     }
 }
@@ -486,5 +484,6 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> ForkPool<'a, Arg, Ret> {
 impl<'a, Arg: Send, Ret: Send + Sync> Drop for ForkPool<'a, Arg, Ret> {
     fn drop(&mut self) {
         self.channel.send(SupervisorMsg::Shutdown).unwrap();
+        self.joinguard.join();
     }
 }

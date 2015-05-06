@@ -29,25 +29,25 @@ use ::poolsupervisor::SupervisorMsg;
 static STEAL_TRIES_UNTIL_BACKOFF: u32 = 30;
 static BACKOFF_INC_US: u32 = 10;
 
-pub struct WorkerThread<Arg: Send, Ret: Send + Sync> {
+pub struct WorkerThread<'a, Arg: Send, Ret: Send + Sync> {
     id: usize,
     started: bool,
     supervisor_port: Receiver<()>,
-    supervisor_channel: Sender<SupervisorMsg<Arg, Ret>>,
-    deque: Worker<Task<Arg, Ret>>,
-    stealer: Stealer<Task<Arg, Ret>>,
-    other_stealers: Vec<Stealer<Task<Arg, Ret>>>,
+    supervisor_channel: Sender<SupervisorMsg<'a, Arg, Ret>>,
+    deque: Worker<Task<'a, Arg, Ret>>,
+    stealer: Stealer<Task<'a, Arg, Ret>>,
+    other_stealers: Vec<Stealer<Task<'a, Arg, Ret>>>,
     rng: XorShiftRng,
     sleepers: Arc<AtomicUsize>,
     threadcount: usize,
 }
 
-impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<Arg,Ret> {
+impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
     pub fn new(id: usize,
             port: Receiver<()>,
             channel: Sender<SupervisorMsg<Arg,Ret>>,
-            supervisor_queue: Stealer<Task<Arg, Ret>>,
-            sleepers: Arc<AtomicUsize>) -> WorkerThread<Arg,Ret> {
+            supervisor_queue: Stealer<Task<'a, Arg, Ret>>,
+            sleepers: Arc<AtomicUsize>) -> WorkerThread<'a, Arg, Ret> {
         let pool = BufferPool::new();
         let (worker, stealer) = pool.deque();
 

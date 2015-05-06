@@ -23,35 +23,34 @@ use ::Task;
 use ::workerthread::{WorkerThread};
 
 /// Messages from `ForkPool` and `WorkerThread` to the `PoolSupervisor`.
-pub enum SupervisorMsg<Arg: Send, Ret: Send + Sync> {
+pub enum SupervisorMsg<'a, Arg: Send, Ret: Send + Sync> {
     /// The WorkerThreads use this to tell the `PoolSupervisor` they don't have anything
     /// to do and that stealing did not give any new `Task`s.
     /// The argument `usize` is the id of the `WorkerThread`.
     OutOfWork(usize),
     /// The `ForkPool` uses this to schedule new tasks on the `PoolSupervisor`.
     /// The `PoolSupervisor` will later schedule these to a `WorkerThread` when it see fit.
-    Schedule(Task<Arg,Ret>),
+    Schedule(Task<'a, Arg, Ret>),
     /// Message from the `ForkPool` to the `PoolSupervisor` to tell it to shutdown.
     Shutdown,
 }
 
 /// Internal handle to a WorkerThread
-struct ThreadInfo<'thread> {
+struct ThreadInfo<'t> {
     channel: Sender<()>,
-    #[allow(dead_code)] // Not used, only held for the join on drop effect.
-    joinguard: thread::JoinGuard<'thread, ()>,
+    #[allow(dead_code)] _joinguard: thread::JoinGuard<'t, ()>,
 }
 
-pub struct PoolSupervisorThread<'thread, Arg: Send, Ret: Send + Sync> {
-    port: Receiver<SupervisorMsg<Arg, Ret>>,
-    thread_infos: Vec<ThreadInfo<'thread>>,
+pub struct PoolSupervisorThread<'t, Arg: Send, Ret: Send + Sync> {
+    port: Receiver<SupervisorMsg<'t, Arg, Ret>>,
+    thread_infos: Vec<ThreadInfo<'t>>,
     idle: usize,
-    queue: Worker<Task<Arg, Ret>>,
+    queue: Worker<Task<'t, Arg, Ret>>,
     sleepers: Arc<AtomicUsize>,
 }
 
 impl<'t, Arg: Send + 't, Ret: Send + Sync + 't> PoolSupervisorThread<'t, Arg, Ret> {
-    pub fn spawn(nthreads: usize) -> (Sender<SupervisorMsg<Arg,Ret>>, thread::JoinGuard<'t, ()>) {
+    pub fn spawn(nthreads: usize) -> (Sender<SupervisorMsg<'t, Arg, Ret>>, thread::JoinGuard<'t, ()>) {
         assert!(nthreads > 0);
 
         let pool = BufferPool::new();
@@ -63,7 +62,8 @@ impl<'t, Arg: Send + 't, Ret: Send + Sync + 't> PoolSupervisorThread<'t, Arg, Re
             nthreads,
             worker_channel.clone(),
             stealer,
-            sleepers.clone(),);
+            sleepers.clone(),
+        );
 
         let joinguard = PoolSupervisorThread {
             port: supervisor_port,
