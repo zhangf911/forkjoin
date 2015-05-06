@@ -45,7 +45,7 @@ pub struct WorkerThread<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
 impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
     pub fn new(id: usize,
             port: Receiver<()>,
-            channel: Sender<SupervisorMsg<Arg,Ret>>,
+            channel: Sender<SupervisorMsg<'a, Arg,Ret>>,
             supervisor_queue: Stealer<Task<'a, Arg, Ret>>,
             sleepers: Arc<AtomicUsize>) -> WorkerThread<'a, Arg, Ret> {
         let pool = BufferPool::new();
@@ -65,12 +65,12 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
         }
     }
 
-    pub fn get_stealer(&self) -> Stealer<Task<Arg,Ret>> {
+    pub fn get_stealer(&self) -> Stealer<Task<'a, Arg,Ret>> {
         assert!(!self.started);
         self.stealer.clone()
     }
 
-    pub fn add_other_stealer(&mut self, stealer: Stealer<Task<Arg,Ret>>) {
+    pub fn add_other_stealer(&mut self, stealer: Stealer<Task<'a, Arg,Ret>>) {
         assert!(!self.started);
         self.other_stealers.push(stealer);
         self.threadcount += 1;
@@ -115,7 +115,7 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
         }
     }
 
-    fn execute_task(&self, task: Task<Arg, Ret>) {
+    fn execute_task(&self, task: Task<'a, Arg, Ret>) {
         let fun = task.algo.fun;
         match (fun)(task.arg) {
             TaskResult::Done(ret) => {
@@ -127,7 +127,7 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
         }
     }
 
-    fn steal(&mut self) -> Option<Task<Arg,Ret>> {
+    fn steal(&mut self) -> Option<Task<'a, Arg, Ret>> {
         if self.other_stealers.len() == 0 {
             None // No one to steal from
         } else {
@@ -158,7 +158,7 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
     /// Try to steal tasks from the other workers.
     /// Starts at a random worker and tries every worker until a task is stolen or
     /// every worker has been tried once.
-    fn try_steal(&mut self) -> Option<Task<Arg,Ret>> {
+    fn try_steal(&mut self) -> Option<Task<'a, Arg, Ret>> {
         let len = self.other_stealers.len();
         let start_victim = self.rng.gen_range(0, len);
         for offset in 0..len {
@@ -170,7 +170,13 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
         None
     }
 
-    fn handle_fork(&self, algo: Algorithm<Arg, Ret>, join: ResultReceiver<Ret>, args: Vec<Arg>, joinarg: Option<Ret>) {
+    fn handle_fork(
+        &self,
+        algo: &'a Algorithm<Arg, Ret>,
+        join: ResultReceiver<'a, Ret>,
+        args: Vec<Arg>,
+        joinarg: Option<Ret>)
+    {
         let len: usize = args.len();
         if len == 0 {
             self.handle_fork_zero(algo, join, joinarg);
@@ -187,7 +193,7 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
         }
     }
 
-    fn handle_fork_zero(&self, algo: Algorithm<Arg, Ret>, join: ResultReceiver<Ret>, joinarg: Option<Ret>) {
+    fn handle_fork_zero(&self, algo: &'a Algorithm<Arg, Ret>, join: ResultReceiver<Ret>, joinarg: Option<Ret>) {
         match algo.style {
             AlgoStyle::Summa(ref summastyle) => {
                 let joinres = match *summastyle {
@@ -203,10 +209,16 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
         }
     }
 
-    fn create_result_receivers(&self, len: usize, algo: Algorithm<Arg, Ret>, join: ResultReceiver<Ret>, joinarg: Option<Ret>) -> Vec<ResultReceiver<Ret>> {
+    fn create_result_receivers(
+        &self,
+        len: usize,
+        algo: &'a Algorithm<Arg, Ret>,
+        join: ResultReceiver<'a, Ret>,
+        joinarg: Option<Ret>) -> Vec<ResultReceiver<'a, Ret>>
+    {
         let mut resultreceivers = Vec::with_capacity(len);
         match algo.style {
-            AlgoStyle::Summa(summastyle) => {
+            AlgoStyle::Summa(ref summastyle) => {
                 let (vector, elem_ptrs) = create_result_vec::<Ret>(len);
 
                 let join_arc = Arc::new(JoinBarrier {
@@ -235,7 +247,7 @@ impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> WorkerThread<'a, Arg, Ret> {
             ResultReceiver::Join(ref ptr, ref joinbarrier) => {
                 unsafe { write(**ptr, value); } // Writes without dropping since only null in place
                 if joinbarrier.ret_counter.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    let joinres = match joinbarrier.joinfun {
+                    let joinres = match *joinbarrier.joinfun {
                         SummaStyle::NoArg(ref joinfun) => (joinfun)(&joinbarrier.joinfunarg),
                         SummaStyle::Arg(ref joinfun) => {
                             let joinarg = match joinbarrier.joinarg.as_ref() {

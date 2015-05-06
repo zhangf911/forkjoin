@@ -5,22 +5,24 @@ use forkjoin::{TaskResult,ForkPool,AlgoStyle,SummaStyle,Algorithm};
 
 #[test]
 fn lifetimes() {
-    let mut data: Vec<usize> = vec![10,1,8,3,9,2,7,4,6,5];
-
     let forkpool = ForkPool::with_threads(4);
-    quicksort_par(&mut data[..], forkpool);
+    let sortpool = forkpool.init_algorithm(Algorithm {
+        fun: quicksort_task,
+        style: AlgoStyle::Summa(SummaStyle::NoArg(quicksort_join)),
+    });
+
+    let mut data: Vec<usize> = vec![10,1,8,3,9,2,7,4,6,5];
+    {
+        let job = sortpool.schedule(&mut data[..]);
+        job.recv().unwrap();
+    }
 
     assert_eq!(vec![1,2,3,4,5,6,7,8,9,10], data);
 }
 
 #[cfg(test)]
 fn quicksort_par<'a>(d: &'a mut[usize], forkpool: ForkPool<&'a mut [usize], ()>) {
-    let sortpool = forkpool.init_algorithm(Algorithm {
-        fun: quicksort_task,
-        style: AlgoStyle::Summa(SummaStyle::NoArg(quicksort_join)),
-    });
-    let job = sortpool.schedule(&mut d[..]);
-    job.recv().unwrap();
+
 }
 
 #[cfg(test)]

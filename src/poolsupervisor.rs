@@ -49,8 +49,8 @@ pub struct PoolSupervisorThread<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
     sleepers: Arc<AtomicUsize>,
 }
 
-impl<'t, Arg: Send + 't, Ret: Send + Sync + 't> PoolSupervisorThread<'t, Arg, Ret> {
-    pub fn spawn(nthreads: usize) -> (Sender<SupervisorMsg<'t, Arg, Ret>>, thread::JoinGuard<'t, ()>) {
+impl<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> PoolSupervisorThread<'a, Arg, Ret> {
+    pub fn spawn(nthreads: usize) -> (Sender<SupervisorMsg<'a, Arg, Ret>>, thread::JoinGuard<'a, ()>) {
         assert!(nthreads > 0);
 
         let pool = BufferPool::new();
@@ -77,9 +77,10 @@ impl<'t, Arg: Send + 't, Ret: Send + Sync + 't> PoolSupervisorThread<'t, Arg, Re
     }
 
     fn spawn_workers(nthreads: usize,
-            worker_channel: Sender<SupervisorMsg<Arg,Ret>>,
-            supervisor_stealer: Stealer<Task<Arg, Ret>>,
-            sleepers: Arc<AtomicUsize>) -> Vec<ThreadInfo<'t>> {
+            worker_channel: Sender<SupervisorMsg<'a, Arg,Ret>>,
+            supervisor_stealer: Stealer<Task<'a, Arg, Ret>>,
+            sleepers: Arc<AtomicUsize>) -> Vec<ThreadInfo<'a>>
+    {
         let mut threads = Vec::with_capacity(nthreads);
         let mut thread_channels = Vec::with_capacity(nthreads);
         let mut thread_stealers = Vec::with_capacity(nthreads);
@@ -112,14 +113,14 @@ impl<'t, Arg: Send + 't, Ret: Send + Sync + 't> PoolSupervisorThread<'t, Arg, Re
             let joinguard = thread.spawn();
             thread_infos.push(ThreadInfo {
                 channel: supervisor_channel,
-                joinguard: joinguard,
+                _joinguard: joinguard,
             });
         }
 
         thread_infos
     }
 
-    fn start_thread(self) -> thread::JoinGuard<'t, ()> {
+    fn start_thread(self) -> thread::JoinGuard<'a, ()> {
         let builder = thread::Builder::new().name(format!("fork-join supervisor"));
         let joinguard = builder.scoped(move|| {
             self.main_loop();

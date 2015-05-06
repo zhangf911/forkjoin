@@ -231,6 +231,7 @@ use std::sync::mpsc::{channel,Sender,Receiver,TryRecvError};
 use std::fmt;
 use std::thread;
 use std::marker::PhantomData;
+use std::mem;
 
 mod workerthread;
 mod poolsupervisor;
@@ -411,7 +412,7 @@ impl<'a, Ret> Drop for Job<'a, Ret> {
 
 /// A handle for a specific `Algorithm` running on a `ForkPool`.
 /// Acquired from `ForkPool::init_algorithm`.
-pub struct AlgoOnPool<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
+pub struct AlgoOnPool<'a, Arg: Send, Ret: Send + Sync> {
     forkpool: &'a ForkPool<'a, Arg, Ret>,
     algo: Algorithm<Arg, Ret>,
 }
@@ -423,17 +424,21 @@ impl<'a, Arg: Send, Ret: Send + Sync> AlgoOnPool<'a, Arg, Ret> {
     /// `AlgoStyle::Summa` will only return one message on this channel.
     ///
     /// `AlgoStyle::Search` algorithm might return arbitrary number of messages.
-    pub fn schedule<'j>(&self, arg: Arg) -> Job<'j, Ret> where
-        Arg: 'j
+    pub fn schedule<'j>(&'a self, arg: Arg) -> Job<'j, Ret> where
+        Arg: 'j, Ret: 'j
     {
         let (chan, port) = channel();
 
-        let task = Task {
-            algo: &self.algo,
-            arg: arg,
-            join: ResultReceiver::Channel(Arc::new(Mutex::new(chan))),
-        };
-        self.forkpool.schedule(task);
+        unsafe {
+            let task = Task {
+                algo: &self.algo,
+                arg: arg,
+                join: ResultReceiver::Channel(Arc::new(Mutex::new(chan))),
+            };
+            let internal_task: Task<'a, Arg, Ret> = mem::transmute(task);
+            self.forkpool.schedule(internal_task);
+            mem::forget(task);
+        }
 
         Job {
             port: port,
@@ -445,8 +450,8 @@ impl<'a, Arg: Send, Ret: Send + Sync> AlgoOnPool<'a, Arg, Ret> {
 /// Main struct of the ForkJoin library.
 /// Represents a pool of threads implementing a work stealing algorithm.
 pub struct ForkPool<'a, Arg: Send + 'a, Ret: Send + Sync + 'a> {
-    joinguard: thread::JoinGuard<'a, ()>,
     channel: Sender<SupervisorMsg<'a, Arg, Ret>>,
+    #[allow(dead_code)] _joinguard: thread::JoinGuard<'a, ()>,
 }
 
 impl<'a, Arg: Send, Ret: Send + Sync> ForkPool<'a, Arg, Ret> {
@@ -462,8 +467,8 @@ impl<'a, Arg: Send, Ret: Send + Sync> ForkPool<'a, Arg, Ret> {
         let (channel, joinguard) = PoolSupervisorThread::spawn(nthreads);
 
         ForkPool {
-            joinguard: joinguard,
             channel: channel,
+            _joinguard: joinguard,
         }
     }
 
@@ -484,6 +489,5 @@ impl<'a, Arg: Send, Ret: Send + Sync> ForkPool<'a, Arg, Ret> {
 impl<'a, Arg: Send, Ret: Send + Sync> Drop for ForkPool<'a, Arg, Ret> {
     fn drop(&mut self) {
         self.channel.send(SupervisorMsg::Shutdown).unwrap();
-        self.joinguard.join();
     }
 }
